@@ -1,0 +1,228 @@
+---
+title: "Carbon Calculator Calculations"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+Output matrix definitions:
+
+FD = Final Demand (000's USD)
+
+Z = Transaction Matrix
+
+X = Total Output
+
+A = "Technical Coefficient"
+
+Q = Production Based Emissions Intensity Matrix (Gg/000's USD)
+
+I = Identity Matrix
+
+L = Leontief Matrix
+
+P_sgp = Production based emissions by sector for Singapore in the given year (Gg CO2eq)
+
+P_emis_total = Total Singaporean production based non-direct emissions
+
+E = Consumption based emissions intensity matrix (Gg/000's USD)
+
+C = consumption based emissions matrix (Gg/000's USD)
+
+C_sgp = Consumption based emissions by sector for Singapore in the given year (Gg CO2eq)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Exploration
+
+### Set up environment, read in data
+```{r}
+setwd("/Users/sophiejanaskie/Documents/data-driven-yale/carbon-calculator/")
+wd <- getwd()
+
+# read in Singapore Eora Tables
+
+# final demand matrix (Y or FD)
+# Household Final Consumption, Non-Profit Institutions Serving Households,Government Final Consumption, Gross Fixed Capital Formation, Changes in Inventories, and Acquisitions Less Disposals of Valuables,
+FD <- read.csv("Eora26_2012_pp/Eora26_2012_pp_FD.csv", header=FALSE)
+
+# production-based emissions matrix (Q)
+# PB emissions to the environment
+Q <- read.csv("Eora26_2012_pp/Eora26_2012_pp_Q.csv", header=FALSE)
+
+# direct emissions matrix (QY)
+# PB emissions released during use phase, Tier 0
+Pd <- read.csv("Eora26_2012_pp/Eora26_2012_pp_QY.csv", header=FALSE)
+
+# transaction matrix (intermediates)
+# 26 consumption categories for all 189 countries
+Z <- read.csv("Eora26_2012_pp/Eora26_2012_pp_T.csv", header=FALSE)
+
+# value added
+VA <- read.csv("Eora26_2012_pp/Eora26_2012_pp_VA.csv", header=FALSE)
+
+# labels
+FDlab <- read.delim("Eora26_2012_pp/labels_FD.txt", header=FALSE)
+Qlab <- read.delim("Eora26_2012_pp/labels_Q.txt", header=FALSE)
+Zlab <- read.delim("Eora26_2012_pp/labels_T.txt", header=FALSE)
+VAlab <- read.delim("Eora26_2012_pp/labels_VA.txt", header=FALSE)
+
+```
+
+# Data Cleaning
+
+```{r}
+# specify where Singapore is in Eora Matrix
+sgp_col=3927
+sgp_row=907
+
+# remove discrepancy entries from T and FD matrices
+Z_disc <- Z[,4915]
+
+FD_disc <- matrix(0, nrow=4914, ncol=1)
+
+for(i in 1:length(FD_disc)) {
+  FD_disc[i]=sum(FD[i,1134:1140])
+}
+
+Z_disc <- as.numeric(Z_disc)
+FD_disc <- as.numeric(FD_disc)
+
+# reassign Z and FD without the last row and column
+
+Z = Z[,1:length(Z)-1]
+Z = Z[1:length(Z),]
+
+FD = FD[1:4914,1:1134]
+
+# keep only the row with total CO2eq emissions in the production based emissions matrix (P), and trim discrepancy entry
+
+CO2eq_row = 1856
+P = Q[CO2eq_row,1:4915]
+```
+
+```{r}
+# sum final demand categories into 1 FD column per country
+FD_country <- matrix(0, nrow=4914, ncol=189)
+
+k=1
+for(i in 1:length(FD)) {
+  for(j in seq(from=1,to=length(FD),by=6)) {
+    FD_country[i,k]=sum(FD[i,j:j+5])
+    k=k+1
+  }
+  k=1
+}
+```
+
+
+# Calculations
+
+###Vector of total outputs, X
+```{r}
+X <- matrix(0,nrow=length(Z),ncol=1)
+
+for(i in 1:length(Z)) {
+  X[i,1] = sum(Z[i,]) + sum(FD[i,]) + Z_disc[i] + FD_disc[i]
+}
+```
+
+```{r}
+Z_m <- data.matrix(Z, rownames.force=NA)
+FD_m <- data.matrix(FD, rownames.force=NA)
+```
+
+
+### Technology Matrix, A
+```{r}
+A <- matrix(0,nrow=length(Z),ncol=length(Z))
+
+for(i in 1:length(Z)) {
+  for(j in 1:length(Z)) {
+    A[i,j] = Z_m[i,j] / X[j,1]
+  }
+}
+```
+
+### Calculate production based emissions intensity (Q)
+```{r}
+PB <- matrix(0,nrow=1, ncol=length(Z))
+
+for(i in 1:length(Z)) {
+  PB[1,i] = P[1,i]/X[i]
+}
+
+# assigns the 26 Singaporean sectors in P to P_sgp
+P_sgp = P[1,sgp_col:(sgp_col+25)]
+colnames(P_sgp) <- Zlab[sgp_col:(sgp_col+25),4]
+rownames(P_sgp) <- "carbon"
+
+PB_sgp = PB[1,sgp_col:(sgp_col+25)]
+PB_sgp <- matrix(PB_sgp)
+rownames(PB_sgp) <- Zlab[sgp_col:(sgp_col+25),4]
+
+P_emis_total = sum(P_sgp[1,1:length(P_sgp)])
+
+Pop = 5607000
+
+P_cap = P_emis_total/Pop
+```
+
+### Leontief Inverse (L)
+```{r}
+I <- diag(length(Z))
+diff <- I-A
+L <- solve(diff)
+```
+
+# Calculate consumption based emissions intensity matrix (E)
+
+### Transform PB emissions intensity matrix to CB emissions intensity matrix
+
+```{r}
+# entire E
+E = PB%*%L
+
+# singaporean E
+E_sgp = E[1,sgp_col:(sgp_col+25)]
+E_sgp <- matrix(E_sgp)
+rownames(E_sgp) <- Zlab[sgp_col:(sgp_col+25),4]
+colnames(E_sgp) <- "carbon intensity (CO2/$)"
+```
+
+### Transform E to C (CB emissions inventory) using final demand
+```{r}
+C = E%*%FD_m
+```
+
+### Calculate Singaporean consumption based emissions intensity matrix (E_sgp)
+```{r}
+# isolate singaporean final demand
+FD_sgp <- FD[sgp_col:(sgp_col+25),sgp_row:(sgp_row+6)]
+
+# sum FD_sgp into one column
+FD_sgp_sum <- matrix(0,nrow=26,ncol=1)
+
+for(i in 1:26) {
+  FD_sgp_sum[i]=sum(FD_sgp[i,])
+}
+
+# insert into FD column, with zeros everywhere else
+FD_sgp_final <- matrix(0,nrow=4914,ncol=1)
+FD_sgp_final[sgp_col:(sgp_col+25),1] <- FD_sgp_sum
+
+# calculate singaporean consumption based emissions
+C_sgp = C[,sgp_row:(sgp_row+5)]
+
+```
+
+
+
+### Export to csv
+```{r}
+write.csv(E, file="CB_emissions_intensity_E.csv")
+write.csv(E_sgp, file="CB_emissions_intensity_SINGAPORE.csv")
+```
+
